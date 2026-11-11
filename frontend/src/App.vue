@@ -1,0 +1,236 @@
+<script setup lang="ts">
+import type { TableColumn } from '@codex-proxy/ui'
+import type { Account, AccountPage } from './api/modules/headers'
+import { ZButton, ZCard, ZConfigProvider, ZEmpty, ZInput, ZTable, ZTag } from '@codex-proxy/ui'
+import { zhHans } from '@codex-proxy/ui/locale'
+import { computed, onBeforeUnmount, shallowRef } from 'vue'
+import { listAccounts } from './api/modules/headers'
+import AccountTest from './components/AccountTest.vue'
+import RuleViewer from './components/RuleViewer.vue'
+import TestSettings from './components/TestSettings.vue'
+
+const snapshot = shallowRef<AccountPage>()
+const loading = shallowRef(false)
+const error = shallowRef('')
+const search = shallowRef('')
+const appliedSearch = shallowRef('')
+const cursors = shallowRef<(string | null)[]>([null])
+const page = shallowRef(0)
+const selected = shallowRef<Account>()
+const viewerOpen = shallowRef(false)
+const testerOpen = shallowRef(false)
+const settingsOpen = shallowRef(false)
+const modalOpen = computed(() => viewerOpen.value || testerOpen.value || settingsOpen.value)
+const notice = shallowRef('')
+const rows = computed(() => snapshot.value?.accounts ?? [])
+const metrics = computed(() => [
+  {
+    label: '本页账号',
+    value: snapshot.value ? rows.value.length : '—',
+    color: 'text-z-primary',
+  },
+  {
+    label: '账号已启用',
+    value: snapshot.value
+      ? rows.value.filter(row => row.enabled).length
+      : '—',
+    color: 'text-z-text',
+  },
+  {
+    label: '已开启覆写',
+    value: snapshot.value
+      ? rows.value.filter(row => row.override_enabled).length
+      : '—',
+    color: 'text-z-success',
+  },
+])
+const columns: TableColumn<Account>[] = [
+  {
+    key: 'name',
+    label: '账号',
+    kind: 'identity',
+    minWidth: 260,
+  },
+  { key: 'group_names', label: '所属分组', minWidth: 160 },
+  { key: 'provider_id', label: '平台', minWidth: 90 },
+  {
+    key: 'enabled',
+    label: '账号状态',
+    kind: 'status',
+    minWidth: 100,
+  },
+  {
+    key: 'override_enabled',
+    label: '请求头覆写',
+    kind: 'status',
+    minWidth: 110,
+  },
+  {
+    key: 'header_count',
+    label: '请求头数量',
+    kind: 'numeric',
+    minWidth: 100,
+  },
+  {
+    key: 'actions',
+    label: '操作',
+    kind: 'actions',
+    width: 140,
+  },
+]
+let sequence = 0
+let alive = true
+onBeforeUnmount(() => {
+  alive = false
+  sequence++
+})
+void load(0, '', [null])
+
+async function load(target: number, query = appliedSearch.value, history = cursors.value) {
+  const current = ++sequence
+  loading.value = true
+  error.value = ''
+  try {
+    const value = await listAccounts(history[target] ?? null, query)
+    if (alive && current === sequence) {
+      snapshot.value = value
+      page.value = target
+      cursors.value = history
+      appliedSearch.value = query
+    }
+  }
+  catch (cause) {
+    if (alive && current === sequence) {
+      error.value = cause instanceof Error
+        ? cause.message
+        : '账号列表读取失败'
+    }
+  }
+  finally {
+    if (alive && current === sequence)
+      loading.value = false
+  }
+}
+function query() {
+  void load(0, search.value.trim(), [null])
+}
+function next() {
+  if (snapshot.value?.next_cursor) {
+    void load(page.value + 1, appliedSearch.value, [
+      ...cursors.value.slice(0, page.value + 1),
+      snapshot.value.next_cursor,
+    ])
+  }
+}
+function view(account: Account) {
+  selected.value = account
+  viewerOpen.value = true
+  notice.value = ''
+}
+function test(account: Account) {
+  selected.value = account
+  testerOpen.value = true
+  notice.value = ''
+}
+</script>
+
+<template>
+  <ZConfigProvider :locale="zhHans">
+    <main class="space-y-4 text-z-text" :class="{ 'overflow-clip': modalOpen }" :style="modalOpen ? { maxHeight: 'var(--plugin-viewport-height, 100dvh)' } : undefined">
+      <RuleViewer v-model="viewerOpen" :account="selected" />
+      <AccountTest v-model="testerOpen" :account="selected" />
+      <TestSettings v-model="settingsOpen" @saved="notice = '检测设置已保存'" />
+      <section aria-label="账号检测概览" class="grid grid-cols-3 gap-2 sm:gap-4">
+        <ZCard v-for="metric in metrics" :key="metric.label">
+          <p class="text-z-xs text-z-text-secondary sm:text-z-sm">
+            {{ metric.label }}
+          </p>
+          <p class="mt-1 text-2xl font-emphasis tabular-nums" :class="metric.color">
+            {{ metric.value }}
+          </p>
+        </ZCard>
+      </section>
+      <ZCard class="min-w-0">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 class="text-z-base font-emphasis">
+            账号检测
+          </h2>
+          <span class="text-z-xs text-z-text-secondary">只读展示规则，检测实际出站覆写</span>
+        </div>
+        <form class="mb-4 flex flex-wrap items-center gap-2" @submit.prevent="query">
+          <ZInput v-model="search" aria-label="搜索账号" placeholder="账号名称、邮箱或 ID" maxlength="256" class="w-full sm:max-w-96" />
+          <ZButton type="primary" native-type="submit" :disabled="loading || modalOpen">
+            查询
+          </ZButton>
+          <ZButton :disabled="modalOpen" class="sm:ml-auto" @click="settingsOpen = true">
+            检测设置
+          </ZButton>
+          <ZButton :loading="loading" :disabled="modalOpen" @click="load(page)">
+            刷新
+          </ZButton>
+        </form>
+        <div v-if="error" role="alert" class="mb-4 flex flex-wrap items-center gap-3 rounded-z bg-z-error-container p-3 text-z-error-on-container">
+          <span>{{ error }}</span>
+          <ZButton size="small" :disabled="loading" @click="load(page)">
+            重新读取
+          </ZButton>
+        </div>
+        <p v-if="notice" role="status" class="mb-4 text-z-sm text-z-success">
+          {{ notice }}
+        </p>
+        <ZTable :columns="columns" :data="rows" row-key="account_id" :loading="loading" size="small">
+          <template #name="{ row }">
+            <div class="flex min-w-0 items-center gap-3">
+              <span aria-hidden="true" class="grid size-8 shrink-0 place-items-center rounded-z bg-z-primary-container font-emphasis text-z-primary-on-container">
+                {{ (row.name || row.email || row.account_id).slice(0, 1).toUpperCase() }}
+              </span>
+              <div class="min-w-0 space-y-1">
+                <div class="truncate font-emphasis" :title="row.account_id">
+                  {{ row.name || row.email || row.account_id }}
+                </div>
+                <div v-if="row.name && row.email && row.email !== row.name" class="truncate text-z-xs text-z-text-secondary" :title="row.email">
+                  {{ row.email }}
+                </div>
+              </div>
+            </div>
+          </template>
+          <template #group_names="{ row }">
+            <span class="block truncate text-z-xs" :title="row.group_names.join('、') || '未分组'">{{ row.group_names.join('、') || '未分组' }}</span>
+          </template>
+          <template #enabled="{ row }">
+            <ZTag :type="row.enabled ? 'success' : 'info'" size="small">
+              {{ row.enabled ? '已启用' : '已停用' }}
+            </ZTag>
+          </template>
+          <template #override_enabled="{ row }">
+            <ZTag :type="row.override_enabled ? 'success' : 'info'" size="small">
+              {{ row.override_enabled ? '已开启' : '已关闭' }}
+            </ZTag>
+          </template>
+          <template #actions="{ row }">
+            <ZButton variant="link" size="small" :aria-label="`查看 ${row.name || row.account_id}`" :disabled="loading || modalOpen" @click="view(row)">
+              查看
+            </ZButton>
+            <ZButton variant="link" size="small" :aria-label="`检测 ${row.name || row.account_id}`" :disabled="loading || modalOpen || !row.enabled" @click="test(row)">
+              检测
+            </ZButton>
+          </template>
+          <template #empty>
+            <ZEmpty :title="error ? '账号读取失败' : '暂无匹配账号'" surface="none" />
+          </template>
+        </ZTable>
+        <div v-if="snapshot" class="mt-4 flex flex-wrap items-center justify-between gap-3 text-z-sm text-z-text-secondary">
+          <span>第 {{ page + 1 }} 页，本页 {{ rows.length }} 个账号</span>
+          <div class="flex gap-2">
+            <ZButton size="small" :disabled="loading || modalOpen || page === 0" @click="load(page - 1)">
+              上一页
+            </ZButton>
+            <ZButton size="small" :disabled="loading || modalOpen || !snapshot.next_cursor" @click="next">
+              下一页
+            </ZButton>
+          </div>
+        </div>
+      </ZCard>
+    </main>
+  </ZConfigProvider>
+</template>
