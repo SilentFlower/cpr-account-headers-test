@@ -139,11 +139,12 @@ async fn route(call: &TypedCall<ManagementRequest>, tests: &Tests) -> Result<Val
             Ok(value["data"].clone())
         }
         ("GET", "test/settings") if query.is_empty() => {
-            let (settings, groups) = tokio::try_join!(
+            let (settings, groups, keys) = tokio::try_join!(
                 test_settings::load(&call.host),
-                test_settings::groups(&call.host)
+                test_settings::groups(&call.host),
+                test_settings::keys(&call.host)
             )?;
-            Ok(json!({"settings":settings,"groups":groups}))
+            Ok(json!({"settings":settings,"groups":groups,"keys":keys}))
         }
         ("POST", "test/settings") if query.is_empty() => tests.save_settings(call).await,
         ("POST", "test") if query.is_empty() => tests.run(call).await,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SharedTestSettings, TestGroup } from '../api/modules/testing'
+import type { SharedTestSettings, TestGroup, TestKey } from '../api/modules/testing'
 import { ZButton, ZDialog, ZFormItem } from '@codex-proxy/ui'
 import { ZSelect } from '@codex-proxy/ui/select'
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue'
@@ -9,6 +9,17 @@ const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>({ required: true })
 const settings = shallowRef<SharedTestSettings>()
 const groups = shallowRef<TestGroup[]>([])
+const keys = shallowRef<TestKey[]>([])
+const key = shallowRef('')
+const keyOptions = computed(() => [
+  { value: '', label: '自动准备检测 Key' },
+  ...keys.value.map(item => ({ value: item.id, label: `${item.name}${item.enabled ? '' : '（已停用）'}`, disabled: !item.enabled })),
+  ...(key.value && !keys.value.some(item => item.id === key.value)
+    ? [
+        { value: key.value, label: '原 API Key 已删除，请重新选择', disabled: true },
+      ]
+    : []),
+])
 const group = shallowRef('')
 const loading = shallowRef(false)
 const saving = shallowRef(false)
@@ -46,6 +57,8 @@ async function load() {
     if (alive && current === generation) {
       settings.value = value.settings
       groups.value = value.groups
+      keys.value = value.keys
+      key.value = settings.value.keyId ?? ''
       group.value = settings.value.groupId ?? ''
     }
   }
@@ -67,7 +80,7 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
-    await saveTestSettings({ groupId: group.value || null, version: settings.value.version })
+    await saveTestSettings({ keyId: key.value || null, groupId: group.value || null, version: settings.value.version })
     if (alive) {
       emit('saved')
       open.value = false
@@ -91,18 +104,26 @@ async function save() {
 <template>
   <ZDialog v-model="open" title="检测设置" description="所有账号共用此设置" width="32rem" :show-close="!saving" :close-on-click-modal="false" :close-on-press-escape="!saving">
     <form id="account-headers-test-settings" class="space-y-4" @submit.prevent="save">
-      <ZFormItem label="统一检测分组">
-        <ZSelect v-model="group" :options="options" aria-label="统一检测分组" :disabled="loading || saving || !settings || mustReload" class="w-full" />
+      <ZFormItem label="检测 API Key">
+        <ZSelect v-model="key" :options="keyOptions" filterable aria-label="检测 API Key" :disabled="loading || saving || !settings || mustReload" class="w-full" />
       </ZFormItem>
-      <p class="text-z-sm text-z-text-secondary">
-        选择已有分组后，请确保它包含所有待测账号。检测会定向选择你点中的账号
+      <p v-if="key" class="text-z-sm text-z-text-secondary">
+        使用所选 Key 的账号权限，检测用量计入该 Key。检测会固定到你点中的账号
       </p>
-      <p class="text-z-sm text-z-text-secondary">
-        留空时，首次检测自动创建一个共享分组。后续检测复用该组，并补入当前全部账号
-      </p>
-      <p class="text-z-xs text-z-text-secondary">
-        每个检测分组复用一个专用 Key，模型用量计入该 Key
-      </p>
+      <template v-else>
+        <ZFormItem label="统一检测分组">
+          <ZSelect v-model="group" :options="options" aria-label="统一检测分组" :disabled="loading || saving || !settings || mustReload" class="w-full" />
+        </ZFormItem>
+        <p class="text-z-sm text-z-text-secondary">
+          选择已有分组后，请确保它包含所有待测账号。检测会定向选择你点中的账号
+        </p>
+        <p class="text-z-sm text-z-text-secondary">
+          留空时，首次检测自动创建一个共享分组。后续检测复用该组，并补入当前全部账号
+        </p>
+        <p class="text-z-xs text-z-text-secondary">
+          每个检测分组复用一个专用 Key，模型用量计入该 Key
+        </p>
+      </template>
       <p v-if="loading" role="status" class="text-z-sm text-z-text-secondary">
         正在读取检测设置
       </p>

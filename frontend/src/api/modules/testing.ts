@@ -80,7 +80,9 @@ async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise
 }
 
 /** 当前插件实例的统一测试设置 */
-export interface SharedTestSettings { groupId: string | null, version: string | null }
+export interface SharedTestSettings { keyId: string | null, groupId: string | null, version: string | null }
+/** 可选择的既有 API Key */
+export interface TestKey { id: string, name: string, enabled: boolean }
 /** 可选择的原生分组 */
 export interface TestGroup { id: string, name: string, enabled: boolean }
 
@@ -88,13 +90,14 @@ export interface TestGroup { id: string, name: string, enabled: boolean }
  * 读取统一设置及已有分组
  * @return 设置版本与当前分组选择项
  */
-export async function getTestSettings(): Promise<{ settings: SharedTestSettings, groups: TestGroup[] }> {
+export async function getTestSettings(): Promise<{ settings: SharedTestSettings, groups: TestGroup[], keys: TestKey[] }> {
   const value = await request('test/settings')
-  if (!isObject(value) || !isSettings(value.settings) || !Array.isArray(value.groups)
-    || !value.groups.every((item: unknown): item is TestGroup => isObject(item) && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.enabled === 'boolean')) {
+  if (!isObject(value) || !isSettings(value.settings) || !Array.isArray(value.groups) || !Array.isArray(value.keys)
+    || !value.groups.every((item: unknown): item is TestGroup => isObject(item) && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.enabled === 'boolean')
+    || !value.keys.every((item: unknown): item is TestKey => isObject(item) && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.enabled === 'boolean')) {
     throw new Error('测试设置响应无效')
   }
-  return { settings: value.settings, groups: value.groups }
+  return { settings: value.settings, groups: value.groups, keys: value.keys }
 }
 
 /**
@@ -110,6 +113,6 @@ export async function saveTestSettings(settings: SharedTestSettings): Promise<Sh
 }
 
 function isSettings(value: unknown): value is SharedTestSettings {
-  return isObject(value) && (value.groupId === null || typeof value.groupId === 'string')
+  return isObject(value) && (value.keyId === null || typeof value.keyId === 'string') && (value.groupId === null || typeof value.groupId === 'string')
     && (value.version === null || typeof value.version === 'string')
 }

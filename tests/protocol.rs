@@ -28,6 +28,10 @@ struct Host {
     bodies: HashMap<String, VecDeque<Vec<u8>>>,
     id: u64,
     key_created: usize,
+    managed_key_name: String,
+    managed_key_label: String,
+    selected_key: String,
+    key_enabled: bool,
     key_group: String,
     group_calls: usize,
     model_calls: usize,
@@ -54,6 +58,10 @@ impl Host {
             bodies: HashMap::new(),
             id: 0,
             key_created: 0,
+            managed_key_name: "请求头测试 test-instance group-auto".into(),
+            managed_key_label: "cpr-account-headers:test-instance".into(),
+            selected_key: "test-key".into(),
+            key_enabled: true,
             key_group: "group-auto".into(),
             group_calls: 0,
             model_calls: 0,
@@ -158,7 +166,7 @@ impl Host {
                             assert_eq!(q["resource_key"], "test.shared");
                             self.group_calls += 1;
                             payload = serde_json::to_vec(
-                                &json!({"id":"group-auto","name":"共享检测组","enabled":true}),
+                                &json!({"id":"group-auto","name":q["name"],"enabled":true}),
                             )
                             .unwrap();
                             Ok(json!({}))
@@ -171,12 +179,15 @@ impl Host {
                             Ok(json!({}))
                         }
                         "host.data.keys.get" => {
-                            payload=serde_json::to_vec(&json!({"schema_version":1,"client_key_id":"test-key","enabled":true,"group_ids":[self.key_group]})).unwrap();
+                            let q: Value = serde_json::from_slice(&frame.payload).unwrap();
+                            self.selected_key = q["client_key_id"].as_str().unwrap().into();
+                            let existing = self.selected_key != "test-key";
+                            payload=serde_json::to_vec(&json!({"schema_version":1,"client_key_id":self.selected_key,"enabled":self.selected_key!="disabled-key"&&(!existing||self.key_enabled),"group_ids":if existing {json!([])}else{json!([self.key_group])}})).unwrap();
                             Ok(json!({}))
                         }
                         "host.data.access.check" => {
                             let q: Value = serde_json::from_slice(&frame.payload).unwrap();
-                            payload=serde_json::to_vec(&json!({"schema_version":1,"client_key_id":"test-key","accounts":[{"account_id":q["account_ids"][0],"allowed":!self.denied}]})).unwrap();
+                            payload=serde_json::to_vec(&json!({"schema_version":1,"client_key_id":q["client_key_id"],"accounts":[{"account_id":q["account_ids"][0],"allowed":!self.denied}]})).unwrap();
                             Ok(json!({}))
                         }
                         "host.http.dispatch" => {
@@ -188,10 +199,17 @@ impl Host {
                             } else if uri.starts_with("/api/admin/account-groups/options?") {
                                 json!({"code":200,"data":{"items":[{"id":"existing","name":"已有分组","enabled":true}],"page":{"total":1}}})
                             } else if uri.starts_with("/api/admin/client-keys?") {
-                                json!({"code":200,"data":{"items":if self.key_created>0{json!([{"id":"test-key","name":format!("请求头测试 test-instance {}",self.key_group),"label":"cpr-account-headers:test-instance"}])}else{json!([])},"nextCursor":null}})
+                                if !uri.contains("search=") {
+                                    let next = uri.contains("cursor=keys-next");
+                                    json!({"code":200,"data":{"items":if next {json!([{"id":"business-key","name":"openai-所有","enabled":self.key_enabled}])}else{json!([{"id":"disabled-key","name":"停用 Key","enabled":false}])},"nextCursor":if next {None}else{Some("keys-next")}}})
+                                } else {
+                                    json!({"code":200,"data":{"items":if self.key_created>0{json!([{"id":"test-key","name":self.managed_key_name,"label":self.managed_key_label,"enabled":true,"groups":[{"id":self.key_group}]}])}else{json!([])},"nextCursor":null}})
+                                }
                             } else if uri == "/api/admin/client-keys/create" {
                                 let q: Value = serde_json::from_slice(&frame.payload).unwrap();
                                 self.key_group = q["groupIds"][0].as_str().unwrap().into();
+                                self.managed_key_name = q["name"].as_str().unwrap().into();
+                                self.managed_key_label = q["label"].as_str().unwrap().into();
                                 self.key_created += 1;
                                 json!({"code":200,"data":{"id":"test-key","plaintextKey":"secret-must-stay-in-host"}})
                             } else if uri.starts_with("/api/admin/accounts/models?") {
@@ -244,7 +262,7 @@ impl Host {
                         "host.model.execute_stream" => {
                             self.model_calls += 1;
                             self.account = params["account_id"].as_str().unwrap().into();
-                            assert_eq!(params["client_key_id"], "test-key");
+                            assert_eq!(params["client_key_id"], self.selected_key);
                             assert_eq!(
                                 params["provider"],
                                 if self.account == "account-b" {
@@ -350,6 +368,22 @@ async fn shared_group_reuses_key_and_pins_each_provider_with_real_evidence() {
     assert_eq!(host.key_created, 1);
     assert_eq!(host.closed, 3);
     assert_eq!(host.model_calls, 3);
+    let mut legacy = Host::start(State::new()).await;
+    legacy.key_created = 1;
+    assert_eq!(
+        legacy
+            .request(
+                "POST",
+                "test",
+                "",
+                json!({"id":"f".repeat(32),"accountId":"account-a","modelId":"actual-model"})
+            )
+            .await
+            .1["status"],
+        "success"
+    );
+    assert_eq!(legacy.key_created, 1, "旧标签资源继续复用");
+
     assert!(
         !host
             .primary_paths
@@ -448,4 +482,88 @@ async fn cancelled_denied_and_failed_tests_keep_model_resources_bounded() {
     assert_eq!(value["message"], "合成上游错误");
     assert_eq!(host.closed, 1);
     assert!(host.primary_paths.contains(&"diagnostics/finish".into()));
+}
+
+#[tokio::test]
+async fn existing_key_uses_its_scope_without_creating_resources_and_reads_legacy_settings() {
+    let mut host = Host::start(State::from([(
+        "settings".into(),
+        (json!({"groupId":"existing"}), 7),
+    )]))
+    .await;
+    let (status, value) = host.request("GET", "test/settings", "", Value::Null).await;
+    assert_eq!(status, 200);
+    assert!(value["settings"]["keyId"].is_null());
+    assert_eq!(value["settings"]["groupId"], "existing");
+    assert_eq!(value["settings"]["version"], "7");
+    assert!(
+        value["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["name"] == "openai-所有")
+    );
+    let (status, saved) = host
+        .request(
+            "POST",
+            "test/settings",
+            "",
+            json!({"keyId":"business-key","groupId":"existing","version":"7"}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(saved["keyId"], "business-key");
+    let (status, result) = host
+        .request(
+            "POST",
+            "test",
+            "",
+            json!({"id":"d".repeat(32),"accountId":"account-b","modelId":"actual-model"}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(result["status"], "success");
+    assert_eq!(host.selected_key, "business-key");
+    assert_eq!(host.key_created, 0);
+    assert_eq!(host.group_calls, 0);
+    assert_eq!(host.closed, 1);
+    assert_eq!(
+        host.request(
+            "POST",
+            "test/settings",
+            "",
+            json!({"keyId":"disabled-key","groupId":null,"version":saved["version"]})
+        )
+        .await
+        .0,
+        400
+    );
+    host.denied = true;
+    assert_eq!(
+        host.request(
+            "POST",
+            "test",
+            "",
+            json!({"id":"e".repeat(32),"accountId":"account-a","modelId":"actual-model"})
+        )
+        .await
+        .0,
+        400
+    );
+    host.denied = false;
+    host.key_enabled = false;
+    assert_eq!(
+        host.request(
+            "POST",
+            "test",
+            "",
+            json!({"id":"f".repeat(32),"accountId":"account-a","modelId":"actual-model"})
+        )
+        .await
+        .0,
+        400
+    );
+    assert_eq!(host.model_calls, 1);
+    assert_eq!(host.key_created, 0);
+    assert_eq!(host.group_calls, 0);
 }

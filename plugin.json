@@ -3,7 +3,7 @@
   "publisher": "silentflower",
   "name": "account-headers-test",
   "displayName": "账号请求头检测",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "定向检测账号模型响应与真实请求头覆写，只读展示账号规则",
   "license": "Apache-2.0",
   "engines": {
@@ -32,13 +32,16 @@
   "state": [
     {
       "namespace": "testing",
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "schema": {
         "type": "object"
       },
       "maximumRecords": 1,
-      "maximumBytes": 4096,
-      "maximumValueBytes": 4096
+      "maximumBytes": 65536,
+      "maximumValueBytes": 65536,
+      "migratesFrom": [
+        1
+      ]
     }
   ]
 }

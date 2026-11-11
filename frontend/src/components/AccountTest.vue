@@ -153,10 +153,10 @@ function stop() {
   <ZDialog v-model="open" title="检测请求头" :description="[account?.name || account?.account_id, account?.email && account.email !== account.name ? account.email : null].filter(Boolean).join(' · ')" width="52rem" :close-on-click-modal="false">
     <form id="account-headers-test" class="space-y-4" @submit.prevent="run">
       <p class="text-z-sm text-z-text-secondary">
-        使用统一测试分组和专用 Key，定向测试当前账号，最长等待 45 秒
+        按检测设置定向测试当前账号，最长等待 45 秒
       </p>
       <p class="text-z-xs text-z-text-secondary">
-        可在账号列表的「检测设置」中选择已有分组。留空时自动创建并复用共享分组
+        可在「检测设置」选择已有 API Key，留空时使用共享分组与检测专用 Key
       </p>
       <ZFormItem label="检测模型">
         <div class="space-y-2">

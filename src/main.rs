@@ -8,7 +8,7 @@ mod test_settings;
 mod testing;
 use gateway_plugin_sdk::{
     Manifest,
-    client::{PluginBuilder, PluginSession, SessionConfig},
+    client::{PluginBuilder, PluginSession, SessionConfig, TypedReply, methods},
 };
 use std::error::Error;
 #[tokio::main(flavor = "current_thread")]
@@ -27,6 +27,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     let tests = testing::Tests::default();
     let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
+        .on(methods::STATE_MIGRATE, |call| async move {
+            test_settings::migrate(call.request).map(TypedReply::new)
+        })?
         .management(management::registration(), move |call| {
             management::handle(call, tests.clone())
         })?
